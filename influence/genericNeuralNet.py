@@ -574,26 +574,21 @@ class GenericNeuralNet(object):
     def get_cg_callback(self, v, verbose):
         fmin_loss_fn = self.get_fmin_loss_fn(v)
         
+        #for printing purposes; returns the quatratic and the linear parts
+        #of the loss separately
         def fmin_loss_split(x):
             hessian_vector_val = self.minibatch_hessian_vector_val(self.vec_to_list(x))
 
             return 0.5 * np.dot(np.concatenate(hessian_vector_val), x), -np.dot(np.concatenate(v), x)
 
         def cg_callback(x):
-            # x is current params
-            v = self.vec_to_list(x)
-            idx_to_remove = 5
-
-            single_train_feed_dict = self.fill_feed_dict_with_one_ex(self.data_sets.train, idx_to_remove)      
-            train_grad_loss_val = self.sess.run(self.grad_total_loss_op, feed_dict=single_train_feed_dict)
-            predicted_loss_diff = np.dot(np.concatenate(v), np.concatenate(train_grad_loss_val)) / self.num_train_examples
 
             if verbose:
+                # x is current solution for inverse hvp
+                v = self.vec_to_list(x)
                 print('Function value: %s' % fmin_loss_fn(x))
-                sys.stdout.flush()
                 quad, lin = fmin_loss_split(x)
                 print('Split function value: %s, %s' % (quad, lin))
-                print('Predicted loss diff on train_idx %s: %s' % (idx_to_remove, predicted_loss_diff))
                 sys.stdout.flush()
 
         return cg_callback
@@ -606,7 +601,7 @@ class GenericNeuralNet(object):
 
         fmin_results = fmin_ncg(
             f=fmin_loss_fn,
-            x0=np.concatenate([x.flatten() for x in v]),
+            x0=np.concatenate([x.flatten() for x in v]), #how is this different from x0 = v.flatten()?
             fprime=fmin_grad_fn,
             fhess_p=self.get_fmin_hvp,
             callback=cg_callback,
@@ -648,6 +643,92 @@ class GenericNeuralNet(object):
             test_grad_loss_no_reg_val = self.minibatch_mean_eval([op], self.data_sets.test)[0]
         
         return test_grad_loss_no_reg_val
+
+
+    def get_train_grad_loss_no_reg_val_single_train_idx(self, single_train_idx, loss_type='normal_loss'):
+
+        if loss_type == 'normal_loss':
+            op = self.grad_loss_no_reg_op
+        elif loss_type == 'adversarial_loss':
+            op = self.grad_adversarial_loss_op
+        else:
+            raise ValueError, 'Loss must be specified'
+
+        train_feed_dict = self.fill_feed_dict_with_one_ex(self.data_sets.train,
+                                                          single_train_idx)
+        return self.sess.run(op, feed_dict=train_feed_dict)
+
+
+    def get_influence_on_multiple_test_losses_for_single_train_idx(
+        self, test_indices, single_train_idx, 
+        approx_type='cg', approx_params=None,
+        force_refresh=True,
+        loss_type='normal_loss',
+        X=None, Y=None):
+
+        # If train_idx is None then use X and Y (phantom points)
+        # Need to make sure test_idx stays consistent between models
+        # because mini-batching permutes dataset order
+
+        if single_train_idx is None: 
+            if (X is None) or (Y is None): raise ValueError, 'X and Y must be specified if using phantom points.'
+            if len(X) != 1: raise ValueError, 'X and Y must have length 1'
+            if len(Y) != 1: raise ValueError, 'X and Y must have length 1'
+        else:
+            if (X is not None) or (Y is not None): raise ValueError, 'X and Y cannot be specified if train_idx is specified.'
+
+        train_grad_loss_no_reg_val =\
+            self.get_train_grad_loss_no_reg_val_single_train_idx(
+                single_train_idx=single_train_idx, loss_type=loss_type)
+
+        print('Norm of train gradient: %s' %
+              np.linalg.norm(np.concatenate(
+              [x.flatten() for x in train_grad_loss_no_reg_val])))
+        sys.stdout.flush()
+
+        start_time = time.time()
+
+        train_description = str(single_train_idx)
+        approx_filename = os.path.join(self.train_dir,
+            '%s-%s-%s-train-%s.npz' %
+            (self.model_name, approx_type, loss_type, train_description))
+        if os.path.exists(approx_filename) and force_refresh == False:
+            inverse_hvp = list(np.load(approx_filename)['inverse_hvp'])
+            print('Loaded inverse HVP from %s' % approx_filename)
+            sys.stdout.flush()
+        else:
+            inverse_hvp = self.get_inverse_hvp(
+                train_grad_loss_no_reg_val,
+                approx_type,
+                approx_params)
+            np.savez(approx_filename, inverse_hvp=inverse_hvp)
+            print('Saved inverse HVP to %s' % approx_filename)
+            sys.stdout.flush()
+
+        duration = time.time() - start_time
+        print('Inverse HVP took %s sec' % duration)
+        sys.stdout.flush()
+
+        sys.stdout.flush()
+        start_time = time.time()
+
+        print("Processing examples")
+        sys.stdout.flush()
+        predicted_loss_diffs = np.zeros([len(test_indices)])
+        for counter, test_idx in enumerate(test_indices):            
+            if (counter%1000 == 0):
+                print("Did",counter,"examples")
+                sys.stdout.flush()
+            single_test_feed_dict = self.fill_feed_dict_with_one_ex(self.data_sets.test, test_idx)      
+            test_grad_loss_val = self.sess.run(self.grad_total_loss_op, feed_dict=single_test_feed_dict)
+            predicted_loss_diffs[counter] =\
+                np.dot(np.concatenate(inverse_hvp), np.concatenate(test_grad_loss_val)) / self.num_train_examples
+                
+        duration = time.time() - start_time
+        print('Multiplying by %s test examples took %s sec' % (len(test_indices), duration))
+        sys.stdout.flush()
+
+        return predicted_loss_diffs
 
 
     def get_influence_on_test_loss(self, test_indices, train_idx, 

@@ -151,7 +151,7 @@ class KerasTensorflowModel(GenericNeuralNet):
 
     def fill_feed_dict_with_one_ex(self, data_set, target_idx):
         input_feed = data_set.x[target_idx, :].reshape(1, -1)
-        labels_feed = data_set.labels[target_idx].reshape(1).astype("int32")
+        labels_feed = data_set.labels[target_idx].reshape(1)
         feed_dict = {
             self.input_placeholder: input_feed,
             self.labels_placeholder: labels_feed,
