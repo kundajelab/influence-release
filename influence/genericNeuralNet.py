@@ -174,6 +174,7 @@ class GenericNeuralNet(object):
         params_val = self.sess.run(self.params)
         self.num_params = len(np.concatenate(params_val))        
         print('Total number of parameters: %s' % self.num_params)
+        sys.stdout.flush()
 
 
         def vec_to_list(v):
@@ -319,6 +320,7 @@ class GenericNeuralNet(object):
 
         print('Norm of the mean of gradients: %s' % np.linalg.norm(np.concatenate(grad_loss_val)))
         print('Norm of the params: %s' % np.linalg.norm(np.concatenate(params_val)))
+        sys.stdout.flush()
 
 
 
@@ -352,7 +354,9 @@ class GenericNeuralNet(object):
         """
         Trains a model for a specified number of steps.
         """
-        if verbose: print('Training for %s steps' % num_steps)
+        if verbose:
+            print('Training for %s steps' % num_steps)
+            sys.stdout.flush()
 
         sess = self.sess            
 
@@ -379,6 +383,7 @@ class GenericNeuralNet(object):
                 if step % 1000 == 0:
                     # Print status to stdout.
                     print('Step %d: loss = %.8f (%.3f sec)' % (step, loss_val, duration))
+                    sys.stdout.flush()
 
             # Save a checkpoint and evaluate the model periodically.
             if (step + 1) % 100000 == 0 or (step + 1) == num_steps:
@@ -392,6 +397,7 @@ class GenericNeuralNet(object):
 
         if do_checks:
             print('Model %s loaded. Sanity checks ---' % checkpoint_to_load)
+            sys.stdout.flush()
             self.print_model_eval()
 
 
@@ -502,6 +508,7 @@ class GenericNeuralNet(object):
                 # Update: v + (I - Hessian_at_x) * cur_estimate
                 if (j % print_iter == 0) or (j == recursion_depth - 1):
                     print("Recursion at depth %s: norm is %.8lf" % (j, np.linalg.norm(np.concatenate(cur_estimate))))
+                    sys.stdout.flush()
                     feed_dict = self.update_feed_dict_with_v_placeholder(feed_dict, cur_estimate)
 
             if inverse_hvp is None:
@@ -583,9 +590,11 @@ class GenericNeuralNet(object):
 
             if verbose:
                 print('Function value: %s' % fmin_loss_fn(x))
+                sys.stdout.flush()
                 quad, lin = fmin_loss_split(x)
                 print('Split function value: %s, %s' % (quad, lin))
                 print('Predicted loss diff on train_idx %s: %s' % (idx_to_remove, predicted_loss_diff))
+                sys.stdout.flush()
 
         return cg_callback
 
@@ -597,7 +606,7 @@ class GenericNeuralNet(object):
 
         fmin_results = fmin_ncg(
             f=fmin_loss_fn,
-            x0=np.concatenate(v),
+            x0=np.concatenate([x.flatten() for x in v]),
             fprime=fmin_grad_fn,
             fhess_p=self.get_fmin_hvp,
             callback=cg_callback,
@@ -657,17 +666,20 @@ class GenericNeuralNet(object):
 
         test_grad_loss_no_reg_val = self.get_test_grad_loss_no_reg_val(test_indices, loss_type=loss_type)
 
-        print('Norm of test gradient: %s' % np.linalg.norm(np.concatenate(test_grad_loss_no_reg_val)))
+        print('Norm of test gradient: %s' % np.linalg.norm(np.concatenate([x.ravel() for x in test_grad_loss_no_reg_val])))
+        sys.stdout.flush()
 
         start_time = time.time()
 
         if test_description is None:
             test_description = test_indices
 
-        approx_filename = os.path.join(self.train_dir, '%s-%s-%s-test-%s.npz' % (self.model_name, approx_type, loss_type, test_description))
+        approx_filename = os.path.join(self.train_dir,
+            '%s-%s-%s-test-%s.npz' % (self.model_name, approx_type, loss_type, test_description))
         if os.path.exists(approx_filename) and force_refresh == False:
             inverse_hvp = list(np.load(approx_filename)['inverse_hvp'])
             print('Loaded inverse HVP from %s' % approx_filename)
+            sys.stdout.flush()
         else:
             inverse_hvp = self.get_inverse_hvp(
                 test_grad_loss_no_reg_val,
@@ -675,31 +687,43 @@ class GenericNeuralNet(object):
                 approx_params)
             np.savez(approx_filename, inverse_hvp=inverse_hvp)
             print('Saved inverse HVP to %s' % approx_filename)
+            sys.stdout.flush()
 
         duration = time.time() - start_time
         print('Inverse HVP took %s sec' % duration)
+        sys.stdout.flush()
 
-
-
+        sys.stdout.flush()
         start_time = time.time()
         if train_idx is None:
+            print("Processing examples")
+            sys.stdout.flush()
             num_to_remove = len(Y)
             predicted_loss_diffs = np.zeros([num_to_remove])            
             for counter in np.arange(num_to_remove):
+                if (counter%1000 == 0):
+                    print("Did",counter,"examples")
+                    sys.stdout.flush()
                 single_train_feed_dict = self.fill_feed_dict_manual(X[counter, :], [Y[counter]])      
                 train_grad_loss_val = self.sess.run(self.grad_total_loss_op, feed_dict=single_train_feed_dict)
                 predicted_loss_diffs[counter] = np.dot(np.concatenate(inverse_hvp), np.concatenate(train_grad_loss_val)) / self.num_train_examples            
 
         else:            
+            print("Processing examples")
+            sys.stdout.flush()
             num_to_remove = len(train_idx)
             predicted_loss_diffs = np.zeros([num_to_remove])
             for counter, idx_to_remove in enumerate(train_idx):            
+                if (counter%1000 == 0):
+                    print("Did",counter,"examples")
+                    sys.stdout.flush()
                 single_train_feed_dict = self.fill_feed_dict_with_one_ex(self.data_sets.train, idx_to_remove)      
                 train_grad_loss_val = self.sess.run(self.grad_total_loss_op, feed_dict=single_train_feed_dict)
                 predicted_loss_diffs[counter] = np.dot(np.concatenate(inverse_hvp), np.concatenate(train_grad_loss_val)) / self.num_train_examples
                 
         duration = time.time() - start_time
         print('Multiplying by %s train examples took %s sec' % (num_to_remove, duration))
+        sys.stdout.flush()
 
         return predicted_loss_diffs
 
@@ -721,12 +745,15 @@ class GenericNeuralNet(object):
 
         # Do power iteration to find largest eigenvalue
         print('Starting power iteration to find largest eigenvalue...')
+        sys.stdout.flush()
 
         largest_eig = norm_val
         print('Largest eigenvalue is %s' % largest_eig)
+        sys.stdout.flush()
 
         # Do power iteration to find smallest eigenvalue
         print('Starting power iteration to find smallest eigenvalue...')
+        sys.stdout.flush()
         cur_estimate = initial_v
         
         for i in range(num_iter):          
@@ -736,15 +763,19 @@ class GenericNeuralNet(object):
 
             if i % print_iterations == 0:
                 print(-norm_val + largest_eig)
+                sys.stdout.flush()
                 dotp = np.dot(np.concatenate(new_cur_estimate), np.concatenate(cur_estimate))
                 print("dot: %s" % dotp)
+                sys.stdout.flush()
             cur_estimate = new_cur_estimate
 
         smallest_eig = -norm_val + largest_eig
         assert dotp < 0, "Eigenvalue calc failed to find largest eigenvalue"
 
         print('Largest eigenvalue is %s' % largest_eig)
+        sys.stdout.flush()
         print('Smallest eigenvalue is %s' % smallest_eig)
+        sys.stdout.flush()
         return largest_eig, smallest_eig
 
 
@@ -762,7 +793,9 @@ class GenericNeuralNet(object):
         # Calculate v_placeholder (gradient of loss at test point)
         test_grad_loss_no_reg_val = self.get_test_grad_loss_no_reg_val(test_indices, loss_type=loss_type)            
 
-        if verbose: print('Norm of test gradient: %s' % np.linalg.norm(np.concatenate(test_grad_loss_no_reg_val)))
+        if verbose:
+            print('Norm of test gradient: %s' % np.linalg.norm(np.concatenate(test_grad_loss_no_reg_val)))
+            sys.stdout.flush()
         
         start_time = time.time()
 
@@ -773,7 +806,9 @@ class GenericNeuralNet(object):
         
         if os.path.exists(approx_filename) and force_refresh == False:
             inverse_hvp = list(np.load(approx_filename)['inverse_hvp'])
-            if verbose: print('Loaded inverse HVP from %s' % approx_filename)
+            if verbose:
+                print('Loaded inverse HVP from %s' % approx_filename)
+                sys.stdout.flush()
         else:            
             inverse_hvp = self.get_inverse_hvp(
                 test_grad_loss_no_reg_val,
@@ -781,10 +816,14 @@ class GenericNeuralNet(object):
                 approx_params,
                 verbose=verbose)
             np.savez(approx_filename, inverse_hvp=inverse_hvp)
-            if verbose: print('Saved inverse HVP to %s' % approx_filename)            
+            if verbose:
+                print('Saved inverse HVP to %s' % approx_filename)            
+                sys.stdout.flush()
         
         duration = time.time() - start_time
-        if verbose: print('Inverse HVP took %s sec' % duration)
+        if verbose:
+            print('Inverse HVP took %s sec' % duration)
+            sys.stdout.flush()
 
         grad_influence_wrt_input_val = None
 

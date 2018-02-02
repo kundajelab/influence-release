@@ -10,7 +10,7 @@ import numpy as np
 class KerasTensorflowModel(GenericNeuralNet):
 
     def __init__(self, keras_model, batch_size, data_sets,
-                       model_name, **kwargs):
+                       model_name, temperature=1.0, **kwargs):
 
         self.keras_model = keras_model
 
@@ -20,8 +20,10 @@ class KerasTensorflowModel(GenericNeuralNet):
         
         self.batch_size = batch_size
         self.data_sets = data_sets
+        self.train_dir = kwargs.pop('train_dir', 'output')
         log_dir = kwargs.pop('log_dir', 'log')
         self.model_name = model_name
+        self.temperature = temperature
         self.num_classes = keras_model.output_shape[1]
         
         self.mini_batch = True
@@ -49,11 +51,14 @@ class KerasTensorflowModel(GenericNeuralNet):
 
         # Setup gradients and Hessians
         self.params = self.get_all_params()
-        self.grad_total_loss_op = tf.gradients(self.total_loss, self.params)
-        self.grad_loss_no_reg_op = tf.gradients(self.loss_no_reg, self.params)
-        self.v_placeholder = [tf.placeholder(tf.float32, shape=a.get_shape()) for a in self.params]
+        self.reshaped_params = [tf.reshape(x, (np.prod(x.get_shape().as_list()),)) for x in self.params]
+        self.grad_total_loss_op = [tf.reshape(x, (np.prod(x.get_shape().as_list()),))
+                                   for x in tf.gradients(self.total_loss, self.params)]
+        self.grad_loss_no_reg_op = [tf.reshape(x, (np.prod(x.get_shape().as_list()),))
+                                    for x in tf.gradients(self.loss_no_reg, self.params)]
+        self.v_placeholder = [tf.placeholder(tf.float32, shape=(np.prod(a.get_shape().as_list()),)) for a in self.params]
 
-        self.hessian_vector = hessian_vector_product(self.total_loss, self.params, self.v_placeholder)
+        self.hessian_vector = hessian_vector_product(self.total_loss, self.reshaped_params, self.v_placeholder)
 
         self.grad_loss_wrt_input_op = tf.gradients(self.total_loss, self.input_placeholder)        
 
@@ -82,10 +87,11 @@ class KerasTensorflowModel(GenericNeuralNet):
             return_list = []
             cur_pos = 0
             for p in params_val:
-                return_list.append(v[cur_pos : cur_pos+len(p)])
-                cur_pos += len(p)
+                flattened_p = p.flatten()
+                return_list.append(v[cur_pos : cur_pos+len(flattened_p)])
+                cur_pos += len(flattened_p)
 
-            assert cur_pos == len(v)
+            assert cur_pos == len(v), str(cur_pos)+" "+str(len(v))
             return return_list
         return vec_to_list
 
@@ -145,7 +151,7 @@ class KerasTensorflowModel(GenericNeuralNet):
 
     def fill_feed_dict_with_one_ex(self, data_set, target_idx):
         input_feed = data_set.x[target_idx, :].reshape(1, -1)
-        labels_feed = data_set.labels[target_idx].reshape(1)
+        labels_feed = data_set.labels[target_idx].reshape(1).astype("int32")
         feed_dict = {
             self.input_placeholder: input_feed,
             self.labels_placeholder: labels_feed,
@@ -154,7 +160,7 @@ class KerasTensorflowModel(GenericNeuralNet):
         return feed_dict
 
     def inference(self): 
-        return self.keras_model.layers[-2].output 
+        return self.keras_model.layers[-2].output/self.temperature 
 
     def predictions(self, logits):
         preds = tf.nn.softmax(logits, name='preds')
