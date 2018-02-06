@@ -122,9 +122,8 @@ class GenericNeuralNet(object):
         else:
             self.logits = self.inference(self.input_placeholder)
 
-        self.total_loss, self.loss_no_reg, self.indiv_loss_no_reg = self.loss(
-            self.logits, 
-            self.labels_placeholder)
+        self.total_loss, self.loss_no_reg, self.indiv_loss_no_reg, self.obj =\
+            self.loss(self.logits, self.labels_placeholder)
 
         self.global_step = tf.Variable(0, name='global_step', trainable=False)
         self.learning_rate = tf.Variable(self.initial_learning_rate, name='learning_rate', trainable=False)
@@ -143,6 +142,7 @@ class GenericNeuralNet(object):
         self.params = self.get_all_params()
         self.grad_total_loss_op = tf.gradients(self.total_loss, self.params)
         self.grad_loss_no_reg_op = tf.gradients(self.loss_no_reg, self.params)
+        self.grad_obj_op = tf.gradients(self.obj, self.params)
         self.v_placeholder = [tf.placeholder(tf.float32, shape=a.get_shape()) for a in self.params]
         self.u_placeholder = [tf.placeholder(tf.float32, shape=a.get_shape()) for a in self.params]
 
@@ -445,7 +445,7 @@ class GenericNeuralNet(object):
 
         total_loss = tf.add_n(tf.get_collection('losses'), name='total_loss')
 
-        return total_loss, loss_no_reg, indiv_loss_no_reg
+        return total_loss, loss_no_reg, indiv_loss_no_reg, total_loss
 
 
     def adversarial_loss(self, logits, labels):
@@ -644,8 +644,8 @@ class GenericNeuralNet(object):
         
         return test_grad_loss_no_reg_val
 
-
-    def get_train_grad_loss_no_reg_val_single_train_idx(self, single_train_idx, loss_type='normal_loss'):
+    def get_train_grad_loss_no_reg_val_train_indices(self,
+        train_indices, batch_size=100, loss_type='normal_loss'):
 
         if loss_type == 'normal_loss':
             op = self.grad_loss_no_reg_op
@@ -654,15 +654,32 @@ class GenericNeuralNet(object):
         else:
             raise ValueError, 'Loss must be specified'
 
-        train_feed_dict = self.fill_feed_dict_with_one_ex(self.data_sets.train,
-                                                          single_train_idx)
-        return self.sess.run(op, feed_dict=train_feed_dict)
+        assert train_indices is not None
 
+        num_iter = int(np.ceil(len(train_indices) / batch_size))
+        train_grad_loss_no_reg_val = None
+        for i in range(num_iter):
+            start = i*batch_size
+            end = int(min((i+1)*batch_size, len(train_indices)))
+            train_feed_dict = self.fill_feed_dict_with_some_ex(
+                                self.data_sets.train,
+                                train_indices[start:end])
+            temp = self.sess.run(op, feed_dict=train_feed_dict)
+            if (train_grad_loss_no_reg_val is None):
+                train_grad_loss_no_reg_val = [a*(end-start) for a in temp] 
+            else:
+                train_grad_loss_no_reg_val = [
+                    a + b*(end-start) for (a,b)
+                    in zip(train_grad_loss_no_reg_val, temp)]
 
-    def get_influence_on_multiple_test_losses_for_single_train_idx(
-        self, test_indices, single_train_idx, 
+        train_grad_loss_no_reg_val = [a/len(train_indices)
+                                      for a in train_grad_loss_no_reg_val]
+        return train_grad_loss_no_reg_val
+
+    def get_influence_on_multiple_test_losses_for_train_indices(
+        self, test_indices, train_indices, 
         approx_type='cg', approx_params=None,
-        force_refresh=True,
+        force_refresh=True, train_description=None,
         loss_type='normal_loss',
         X=None, Y=None):
 
@@ -670,16 +687,18 @@ class GenericNeuralNet(object):
         # Need to make sure test_idx stays consistent between models
         # because mini-batching permutes dataset order
 
-        if single_train_idx is None: 
-            if (X is None) or (Y is None): raise ValueError, 'X and Y must be specified if using phantom points.'
-            if len(X) != 1: raise ValueError, 'X and Y must have length 1'
-            if len(Y) != 1: raise ValueError, 'X and Y must have length 1'
+        if train_indices is None: 
+            if (X is None) or (Y is None): raise ValueError,\
+                'X and Y must be specified if using phantom points.'
+            assert len(X) == len(Y),\
+                'X and Y must have same length'
         else:
-            if (X is not None) or (Y is not None): raise ValueError, 'X and Y cannot be specified if train_idx is specified.'
+            if (X is not None) or (Y is not None): raise ValueError,\
+            'X and Y cannot be specified if train_indices is specified.'
 
         train_grad_loss_no_reg_val =\
-            self.get_train_grad_loss_no_reg_val_single_train_idx(
-                single_train_idx=single_train_idx, loss_type=loss_type)
+            self.get_train_grad_loss_no_reg_val_train_indices(
+                train_indices=train_indices, loss_type=loss_type)
 
         print('Norm of train gradient: %s' %
               np.linalg.norm(np.concatenate(
@@ -688,10 +707,13 @@ class GenericNeuralNet(object):
 
         start_time = time.time()
 
-        train_description = str(single_train_idx)
-        approx_filename = os.path.join(self.train_dir,
-            '%s-%s-%s-train-%s.npz' %
-            (self.model_name, approx_type, loss_type, train_description))
+        if train_description is None:
+            train_description = train_indices
+
+        approx_filename = os.path.join(
+            self.train_dir,
+            '%s-%s-%s-train-%s.npz' % (
+            self.model_name, approx_type, loss_type, train_description))
         if os.path.exists(approx_filename) and force_refresh == False:
             inverse_hvp = list(np.load(approx_filename)['inverse_hvp'])
             print('Loaded inverse HVP from %s' % approx_filename)
@@ -711,29 +733,56 @@ class GenericNeuralNet(object):
 
         sys.stdout.flush()
         start_time = time.time()
+        if test_indices is None:
+            num_test = len(Y)
+            print("Processing examples")
+            sys.stdout.flush()
+            predicted_obj_diffs = np.zeros([len(Y)]) 
+            for counter in np.arange(len(Y)):
+                if (counter%1000 == 0):
+                    print("Did",counter,"examples")
+                    sys.stdout.flush()
+                single_test_feed_dict =\
+                    self.fill_feed_dict_manual(X[counter, :], [Y[counter]]) 
+                test_grad_obj_val =\
+                    self.sess.run(
+                        self.grad_obj_op,
+                        feed_dict=single_train_feed_dict)
+                predicted_obj_diffs[counter] =(
+                    np.dot(np.concatenate(inverse_hvp),
+                           np.concatenate(train_grad_loss_val))/
+                    self.num_train_examples) 
 
-        print("Processing examples")
-        sys.stdout.flush()
-        predicted_loss_diffs = np.zeros([len(test_indices)])
-        for counter, test_idx in enumerate(test_indices):            
-            if (counter%1000 == 0):
-                print("Did",counter,"examples")
-                sys.stdout.flush()
-            single_test_feed_dict = self.fill_feed_dict_with_one_ex(self.data_sets.test, test_idx)      
-            test_grad_loss_val = self.sess.run(self.grad_total_loss_op, feed_dict=single_test_feed_dict)
-            predicted_loss_diffs[counter] =\
-                np.dot(np.concatenate(inverse_hvp), np.concatenate(test_grad_loss_val)) / self.num_train_examples
+        else:            
+            num_test = len(test_indices)
+            print("Processing examples")
+            sys.stdout.flush()
+            predicted_obj_diffs = np.zeros([len(test_indices)])
+            for counter, idx_to_process in enumerate(test_indices): 
+                if (counter%1000 == 0):
+                    print("Did",counter,"examples")
+                    sys.stdout.flush()
+                single_test_feed_dict =\
+                    self.fill_feed_dict_with_one_ex(self.data_sets.test,
+                                                    idx_to_process)      
+                test_grad_obj_val = self.sess.run(
+                    self.grad_obj_op, feed_dict=single_test_feed_dict)
+                predicted_obj_diffs[counter] = (
+                    np.dot(np.concatenate(inverse_hvp),
+                           np.concatenate(test_grad_obj_val))/
+                    self.num_train_examples)
                 
         duration = time.time() - start_time
-        print('Multiplying by %s test examples took %s sec' % (len(test_indices), duration))
+        print('Multiplying by %s train examples took %s sec' %
+              (num_test, duration))
         sys.stdout.flush()
 
-        return predicted_loss_diffs
+        return predicted_obj_diffs
 
 
     def get_influence_on_test_loss(self, test_indices, train_idx, 
-        approx_type='cg', approx_params=None, force_refresh=True, test_description=None,
-        loss_type='normal_loss',
+        approx_type='cg', approx_params=None, force_refresh=True,
+        test_description=None, loss_type='normal_loss',
         X=None, Y=None):
         # If train_idx is None then use X and Y (phantom points)
         # Need to make sure test_idx stays consistent between models
@@ -861,7 +910,8 @@ class GenericNeuralNet(object):
 
 
     def get_grad_of_influence_wrt_input(self, train_indices, test_indices, 
-        approx_type='cg', approx_params=None, force_refresh=True, verbose=True, test_description=None,
+        approx_type='cg', approx_params=None,
+        force_refresh=True, verbose=True, test_description=None,
         loss_type='normal_loss'):
         """
         If the loss goes up when you remove a point, then it was a helpful point.
