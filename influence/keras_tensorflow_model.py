@@ -43,8 +43,6 @@ class AbstractKerasSequentialTensorflowModel(GenericNeuralNet):
         self.total_loss, self.loss_no_reg, self.indiv_loss_no_reg, self.obj =\
             self.loss(self.logits, self.labels_placeholder)
 
-        self.accuracy_op = self.get_accuracy_op(self.logits,
-                                                self.labels_placeholder)        
         self.preds = self.predictions(self.logits)
 
         # Setup gradients and Hessians
@@ -125,7 +123,8 @@ class AbstractKerasSequentialTensorflowModel(GenericNeuralNet):
 
     def fill_feed_dict_with_all_ex(self, data_set):
         feed_dict = {
-            self.input_placeholder: data_set.x,
+            self.input_placeholder: data_set.x.reshape(
+                [len(data_set.x)]+list(self.keras_model.input_shape[1:])),
             self.labels_placeholder: data_set.labels,
             K.learning_phase(): 0
         }
@@ -136,7 +135,8 @@ class AbstractKerasSequentialTensorflowModel(GenericNeuralNet):
         idx = np.array([True] * num_examples, dtype=bool)
         idx[idx_to_remove] = False
         feed_dict = {
-            self.input_placeholder: data_set.x[idx, :],
+            self.input_placeholder: data_set.x[idx, :].reshape(
+                [np.sum(idx)]+list(self.keras_model.input_shape[1:])),
             self.labels_placeholder: data_set.labels[idx],
             K.learning_phase(): 0
         }
@@ -150,15 +150,16 @@ class AbstractKerasSequentialTensorflowModel(GenericNeuralNet):
     
         input_feed, labels_feed = data_set.next_batch(batch_size)                              
         feed_dict = {
-            self.input_placeholder: input_feed,
+            self.input_placeholder: input_feed.reshape(
+                [len(input_feed)]+list(self.keras_model.input_shape[1:])),
             self.labels_placeholder: labels_feed,            
             K.learning_phase(): 0
         }
         return feed_dict
 
     def fill_feed_dict_with_some_ex(self, data_set, target_indices):
-        input_feed = data_set.x[target_indices, :].reshape(
-                        len(target_indices), -1)
+        input_feed = (data_set.x[target_indices, :]).reshape(
+                        [len(target_indices)]+list(self.keras_model.input_shape[1:]))
         labels_feed = data_set.labels[target_indices].reshape(-1)
         feed_dict = {
             self.input_placeholder: input_feed,
@@ -168,7 +169,8 @@ class AbstractKerasSequentialTensorflowModel(GenericNeuralNet):
         return feed_dict
 
     def fill_feed_dict_with_one_ex(self, data_set, target_idx):
-        input_feed = data_set.x[target_idx, :].reshape(1, -1)
+        input_feed = data_set.x[target_idx, :].reshape(
+                        [1]+list(self.keras_model.input_shape[1:]))
         labels_feed = data_set.labels[target_idx].reshape(1)
         feed_dict = {
             self.input_placeholder: input_feed,
@@ -176,6 +178,19 @@ class AbstractKerasSequentialTensorflowModel(GenericNeuralNet):
             K.learning_phase(): 0            
         }
         return feed_dict
+
+
+    def fill_feed_dict_manual(self, X, Y):
+        X = np.array(X)
+        Y = np.array(Y) 
+        input_feed = X
+        labels_feed = Y.reshape(-1)
+        feed_dict = {
+            self.input_placeholder: input_feed,
+            self.labels_placeholder: labels_feed,
+        }
+        return feed_dict        
+
 
     def loss(self, logits, labels):
         raise NotImplementedError()
@@ -217,8 +232,8 @@ class KerasSequentialCategoricalCrossentropyLoss(
 class AbstractKerasSequentialBinary(AbstractKerasSequentialTensorflowModel):
 
     def __init__(self, task_idx, **kwargs):
-        super(KerasSequentialBinaryCrossentropyLoss, self).__init__(**kwargs)
         self.task_idx = task_idx 
+        super(AbstractKerasSequentialBinary, self).__init__(**kwargs)
 
     def loss(self, logits, labels):
         raise NotImplementedError()
@@ -228,7 +243,7 @@ class AbstractKerasSequentialBinary(AbstractKerasSequentialTensorflowModel):
                 :,self.task_idx]/self.temperature 
 
     def predictions(self, logits):
-        preds = tf.sigmoid(logits[:,self.task_idx], name='preds')
+        preds = tf.sigmoid(logits, name='preds')
         return preds
 
 
@@ -236,8 +251,8 @@ class KerasSequentialBinaryCrossentropyLoss(AbstractKerasSequentialBinary):
 
     def loss(self, logits, labels):
 
-        cross_entropy = - (tf.multiply(labels, tf.log_sigmoid(logits))+
-                           tf.multiply(1.0-labels, tf.log_sigmoid(-logits)))
+        cross_entropy = - (tf.multiply(tf.cast(labels,"float32"), tf.log_sigmoid(logits))+
+                           tf.multiply(1.0-tf.cast(labels,"float32"), tf.log_sigmoid(-logits)))
         indiv_loss_no_reg = cross_entropy
         loss_no_reg = tf.reduce_mean(cross_entropy, name='xentropy_mean')
         print("Warning: weight regularization's effect on loss not supported")
