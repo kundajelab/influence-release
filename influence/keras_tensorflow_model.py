@@ -236,8 +236,9 @@ class KerasSequentialBinaryCrossentropyLoss(AbstractKerasSequentialBinary):
 
     def loss(self, logits, labels):
 
-        cross_entropy = - (tf.multiply(labels, tf.log_sigmoid(logits))+
-                           tf.multiply(1.0-labels, tf.log_sigmoid(-logits)))
+        cross_entropy = - (tf.multiply(labels, tf.log(tf.sigmoid(logits)))+
+                           tf.multiply(1.0-labels, tf.log(tf.sigmoid(-logits)))
+                          )
         indiv_loss_no_reg = cross_entropy
         loss_no_reg = tf.reduce_mean(cross_entropy, name='xentropy_mean')
         print("Warning: weight regularization's effect on loss not supported")
