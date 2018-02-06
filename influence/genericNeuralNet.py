@@ -804,6 +804,9 @@ class GenericNeuralNet(object):
         if test_description is None:
             test_description = test_indices
 
+        if (os.path.isdir(self.train_dir)==False):
+            os.mkdir(self.train_dir)
+
         approx_filename = os.path.join(self.train_dir,
             '%s-%s-%s-test-%s.npz' % (self.model_name, approx_type, loss_type, test_description))
         if os.path.exists(approx_filename) and force_refresh == False:

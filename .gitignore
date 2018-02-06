@@ -1,2 +1,6 @@
 **/*.pyc
 **/*.csv
+*egg-info
+**/*.DS_Store
+**/*.ipynb_checkpoints
+scripts/output/
