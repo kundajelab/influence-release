@@ -188,6 +188,7 @@ class AbstractKerasSequentialTensorflowModel(GenericNeuralNet):
         feed_dict = {
             self.input_placeholder: input_feed,
             self.labels_placeholder: labels_feed,
+            K.learning_phase(): 0            
         }
         return feed_dict        
 
@@ -268,8 +269,10 @@ class KerasSequentialBinaryChangeInProb(AbstractKerasSequentialBinary):
 
     def loss(self, logits, labels):
 
-        cross_entropy = - (tf.multiply(labels, tf.log_sigmoid(logits))+
-                           tf.multiply(1.0-labels, tf.log_sigmoid(-logits)))
+        cross_entropy = - (tf.multiply(tf.cast(labels,"float32"),
+                           tf.log(tf.sigmoid(logits)))+
+                           tf.multiply(1.0-tf.cast(labels,"float32"),
+                           tf.log(tf.sigmoid(-logits))))
         indiv_loss_no_reg = cross_entropy
         loss_no_reg = tf.reduce_mean(cross_entropy, name='xentropy_mean')
         print("Warning: weight regularization's effect on loss not supported")

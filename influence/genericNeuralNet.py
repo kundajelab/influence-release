@@ -687,11 +687,12 @@ class GenericNeuralNet(object):
         # Need to make sure test_idx stays consistent between models
         # because mini-batching permutes dataset order
 
-        if train_indices is None: 
-            if (X is None) or (Y is None): raise ValueError,\
-                'X and Y must be specified if using phantom points.'
-            assert len(X) == len(Y),\
-                'X and Y must have same length'
+        if test_indices is None: 
+            if (X is None): raise ValueError,\
+                'X must be specified if using phantom points.'
+            if (Y is not None):
+                assert len(X) == len(Y),\
+                    'X and Y must have same length'
         else:
             if (X is not None) or (Y is not None): raise ValueError,\
             'X and Y cannot be specified if train_indices is specified.'
@@ -734,23 +735,25 @@ class GenericNeuralNet(object):
         sys.stdout.flush()
         start_time = time.time()
         if test_indices is None:
-            num_test = len(Y)
+            num_test = len(X)
             print("Processing examples")
             sys.stdout.flush()
-            predicted_obj_diffs = np.zeros([len(Y)]) 
-            for counter in np.arange(len(Y)):
+            predicted_obj_diffs = np.zeros([len(X)]) 
+            for counter in np.arange(len(X)):
                 if (counter%1000 == 0):
                     print("Did",counter,"examples")
                     sys.stdout.flush()
                 single_test_feed_dict =\
-                    self.fill_feed_dict_manual(X[counter, :], [Y[counter]]) 
+                    self.fill_feed_dict_manual(
+                            X[counter],
+                            [Y[counter] if Y is not None else 1.0]) 
                 test_grad_obj_val =\
                     self.sess.run(
                         self.grad_obj_op,
-                        feed_dict=single_train_feed_dict)
+                        feed_dict=single_test_feed_dict)
                 predicted_obj_diffs[counter] =(
                     np.dot(np.concatenate(inverse_hvp),
-                           np.concatenate(train_grad_loss_val))/
+                           np.concatenate(test_grad_obj_val))/
                     self.num_train_examples) 
 
         else:            
@@ -773,7 +776,7 @@ class GenericNeuralNet(object):
                     self.num_train_examples)
                 
         duration = time.time() - start_time
-        print('Multiplying by %s train examples took %s sec' %
+        print('Multiplying by %s test examples took %s sec' %
               (num_test, duration))
         sys.stdout.flush()
 
