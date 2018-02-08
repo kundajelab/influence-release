@@ -752,8 +752,9 @@ class GenericNeuralNet(object):
                         self.grad_obj_op,
                         feed_dict=single_test_feed_dict)
                 predicted_obj_diffs[counter] =(
-                    np.dot(np.concatenate(inverse_hvp),
-                           np.concatenate(test_grad_obj_val))/
+                    (len(train_indices)*
+                     np.dot(np.concatenate(inverse_hvp),
+                            np.concatenate(test_grad_obj_val)))/
                     self.num_train_examples) 
 
         else:            
@@ -771,8 +772,9 @@ class GenericNeuralNet(object):
                 test_grad_obj_val = self.sess.run(
                     self.grad_obj_op, feed_dict=single_test_feed_dict)
                 predicted_obj_diffs[counter] = (
-                    np.dot(np.concatenate(inverse_hvp),
-                           np.concatenate(test_grad_obj_val))/
+                    (len(train_indices)*
+                     np.dot(np.concatenate(inverse_hvp),
+                            np.concatenate(test_grad_obj_val)))/
                     self.num_train_examples)
                 
         duration = time.time() - start_time
